@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stl-parser"
-version = "1.8.0"
+version = "1.8.1"
 description = "Semantic Tension Language (STL) Parser - A lightweight parser for structured knowledge representation"
 readme = "README.md"
 requires-python = ">=3.9"
