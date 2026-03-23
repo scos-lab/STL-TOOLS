@@ -93,9 +93,9 @@ STL_GRAMMAR = r"""
     // TERMINALS
     // ========================================
 
-    // Identifier: Alphanumeric + underscore + Unicode letters
-    // Supports: English, Chinese, Arabic, Japanese, etc.
-    IDENTIFIER: /[\w\u4e00-\u9fff\u0600-\u06ff\u3040-\u30ff][\w\u4e00-\u9fff\u0600-\u06ff\u3040-\u30ff]*/
+    // Identifier: Alphanumeric + underscore + hyphen + Unicode letters
+    // Supports: English, Chinese, Arabic, Japanese, kebab-case, etc.
+    IDENTIFIER: /[\w\u4e00-\u9fff\u0600-\u06ff\u3040-\u30ff][\w\-\u4e00-\u9fff\u0600-\u06ff\u3040-\u30ff]*/
 
     // Arrow symbols (Unicode and ASCII)
     ARROW_UNICODE: "\u2192"  // Unicode rightwards arrow

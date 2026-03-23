@@ -87,12 +87,13 @@ class Anchor(BaseModel):
         if not v:
             raise ValueError("Anchor name cannot be empty")
 
-        # Allow Unicode letters, digits, and underscore
+        # Allow Unicode letters, digits, underscore, and hyphen (kebab-case)
         # \w matches [A-Za-z0-9_] plus Unicode word characters
-        if not re.match(r"^[\w\u4e00-\u9fff\u0600-\u06ff]+$", v, re.UNICODE):
+        # Hyphen allowed mid-name but not at start
+        if not re.match(r"^[\w\u4e00-\u9fff\u0600-\u06ff][\w\-\u4e00-\u9fff\u0600-\u06ff]*$", v, re.UNICODE):
             raise ValueError(
-                f"Anchor name '{v}' must be alphanumeric + underscore "
-                "(special characters not allowed)"
+                f"Anchor name '{v}' must be alphanumeric + underscore + hyphen "
+                "(cannot start with hyphen)"
             )
 
         if len(v) > 64:
