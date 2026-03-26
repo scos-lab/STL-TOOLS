@@ -1,4 +1,4 @@
-# STL Parser (v1.7.0)
+# STL Parser (v1.8.2)
 
 **A comprehensive Python toolkit for Semantic Tension Language (STL) — parse, build, validate, query, diff, stream, and repair structured knowledge.**
 
@@ -86,14 +86,35 @@ print(f"Valid: {validation.is_valid}")
 
 ### Clean LLM Output
 
+LLMs (especially small local models) generate imperfect STL. The 3-stage `clean -> repair -> parse` pipeline auto-fixes common issues:
+
 ```python
 from stl_parser import validate_llm_output
 
-result = validate_llm_output("A => B mod(confience=1.5)")
-print(f"Valid: {result.is_valid}")
-print(f"Repairs: {len(result.repairs)}")
-# Repairs fix: missing brackets, wrong arrow, missing ::, typo "confience", value 1.5 clamped to 1.0
+# Spaces in anchors, wrong arrow, missing ::, typo, value out of range — all fixed
+result = validate_llm_output("[Big Problem] -> [Smart Solution] mod(confience=1.2, strenght=0.3)")
+print(result.statements[0])
+# [Big_Problem] -> [Smart_Solution] ::mod(confidence=1.0, strength=0.3)
+
+print(f"Valid: {result.is_valid}, Repairs: {len(result.repairs)}")
+# Valid: True, Repairs: 6
 ```
+
+**Auto-repair capabilities:**
+
+| LLM Error | Example | Repaired To |
+|-----------|---------|-------------|
+| Spaces in anchors | `[Heavy Rain]` | `[Heavy_Rain]` |
+| Wrong arrow | `=>`, `➡`, `—>` | `->` |
+| Missing `::` prefix | `mod(...)` | `::mod(...)` |
+| Missing brackets | `Rain -> [Flood]` | `[Rain] -> [Flood]` |
+| Modifier typos | `confience`, `strenght` | `confidence`, `strength` |
+| Value out of range | `confidence=1.5` | `confidence=1.0` |
+| Unquoted strings | `rule=causal` | `rule="causal"` |
+| Code fences | `` ```stl ... ``` `` | Extracted content |
+| Multi-line statements | Split across lines | Merged |
+
+This makes STL a reliable LLM-to-program communication protocol — small models (7B-14B) that struggle with JSON tool calling can generate STL naturally, and the parser handles the rest.
 
 ### Query Statements
 
@@ -266,7 +287,7 @@ pip install -e ".[dev]"
 ### Run Tests
 
 ```bash
-pytest tests/                          # Run all 531 tests
+pytest tests/                          # Run all 530+ tests
 pytest tests/ --cov=stl_parser         # With coverage report
 pytest tests/test_builder.py           # Single module
 pytest tests/ -k "test_query"          # By name pattern
@@ -302,7 +323,7 @@ Apache License 2.0 — see [LICENSE](../LICENSE).
   author = {SCOS-Lab},
   title = {STL Parser: A Comprehensive Toolkit for Semantic Tension Language},
   year = {2025},
-  version = {1.7.0},
+  version = {1.8.2},
   url = {https://github.com/scos-lab/semantic-tension-language}
 }
 ```

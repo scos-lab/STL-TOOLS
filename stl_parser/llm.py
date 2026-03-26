@@ -228,24 +228,50 @@ def repair(text: str) -> Tuple[str, List[RepairAction]]:
     for i, line in enumerate(lines):
         original = line
 
-        # 1. Fix missing :: prefix on mod()
+        # 1. Fix spaces in anchor names: [Heavy Rain] → [Heavy_Rain]
+        line = _fix_anchor_spaces(line, i + 1, repairs)
+
+        # 2. Fix missing :: prefix on mod()
         line = _fix_mod_prefix(line, i + 1, repairs)
 
-        # 2. Fix missing brackets on anchors
+        # 3. Fix missing brackets on anchors
         line = _fix_missing_brackets(line, i + 1, repairs)
 
-        # 3. Fix unquoted string values in modifiers
+        # 4. Fix unquoted string values in modifiers
         line = _fix_unquoted_strings(line, i + 1, repairs)
 
-        # 4. Clamp out-of-range numeric values
-        line = _clamp_values(line, i + 1, repairs)
-
-        # 5. Fix common typos in modifier keys
+        # 5. Fix common typos in modifier keys (before clamp, so corrected keys get clamped)
         line = _fix_typos(line, i + 1, repairs)
+
+        # 6. Clamp out-of-range numeric values
+        line = _clamp_values(line, i + 1, repairs)
 
         repaired_lines.append(line)
 
     return "\n".join(repaired_lines), repairs
+
+
+def _fix_anchor_spaces(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Fix spaces in anchor names: [Heavy Rain] → [Heavy_Rain].
+
+    LLMs frequently generate natural-language anchor names with spaces.
+    STL anchors only allow [A-Za-z0-9_-:], so spaces must be replaced.
+    """
+    def _replace_spaces(m: re.Match) -> str:
+        name = m.group(1)
+        if " " not in name:
+            return m.group(0)
+        fixed = re.sub(r"\s+", "_", name.strip())
+        repairs.append(RepairAction(
+            type="fix_anchor_spaces",
+            line=line_num,
+            original=f"[{name}]",
+            repaired=f"[{fixed}]",
+            description=f"Replaced spaces in anchor: [{name}] → [{fixed}]",
+        ))
+        return f"[{fixed}]"
+
+    return re.sub(r"\[([^\]]+)\]", _replace_spaces, line)
 
 
 def _fix_mod_prefix(line: str, line_num: int, repairs: List[RepairAction]) -> str:
