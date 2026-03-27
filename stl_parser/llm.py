@@ -99,6 +99,17 @@ _MODIFIER_TYPOS = {
 # Fields with [0.0, 1.0] range
 _CLAMPABLE_FIELDS = {"confidence", "certainty", "strength", "intensity"}
 
+# Modifier fields typed as Optional[str] — if a numeric value is assigned,
+# Pydantic will reject it. The repair pipeline must quote numeric values
+# for these keys so they become strings.
+_STR_TYPED_MODIFIER_FIELDS = {
+    'time', 'duration', 'frequency', 'tense', 'location', 'domain',
+    'scope', 'necessity', 'source', 'author', 'timestamp', 'version',
+    'emotion', 'value', 'valence', 'alignment', 'cause', 'effect',
+    'conditionality', 'intent', 'focus', 'perspective', 'mood',
+    'modality', 'rule',
+}
+
 
 # ========================================
 # CLEAN STAGE
@@ -256,7 +267,19 @@ def _fix_anchor_spaces(line: str, line_num: int, repairs: List[RepairAction]) ->
 
     LLMs frequently generate natural-language anchor names with spaces.
     STL anchors only allow [A-Za-z0-9_-:], so spaces must be replaced.
+
+    Only fixes brackets BEFORE ::mod() — brackets inside mod values
+    (e.g. JSON arrays) must not be touched.
     """
+    # Split at ::mod( to only process the anchor part
+    mod_idx = line.find("::mod(")
+    if mod_idx >= 0:
+        anchor_part = line[:mod_idx]
+        mod_part = line[mod_idx:]
+    else:
+        anchor_part = line
+        mod_part = ""
+
     def _replace_spaces(m: re.Match) -> str:
         name = m.group(1)
         if " " not in name:
@@ -271,7 +294,8 @@ def _fix_anchor_spaces(line: str, line_num: int, repairs: List[RepairAction]) ->
         ))
         return f"[{fixed}]"
 
-    return re.sub(r"\[([^\]]+)\]", _replace_spaces, line)
+    anchor_part = re.sub(r"\[([^\]]+)\]", _replace_spaces, anchor_part)
+    return anchor_part + mod_part
 
 
 def _fix_mod_prefix(line: str, line_num: int, repairs: List[RepairAction]) -> str:
@@ -353,49 +377,280 @@ def _fix_missing_brackets(line: str, line_num: int, repairs: List[RepairAction])
 
 
 def _fix_unquoted_strings(line: str, line_num: int, repairs: List[RepairAction]) -> str:
-    """Quote unquoted string values in ::mod()."""
+    """Normalize and quote values in ::mod().
+
+    Uses a smart tokenizer that respects bracket/brace/paren nesting and
+    identifies key=value boundaries by looking for `identifier=` patterns
+    at depth 0. Handles:
+    - Unquoted multi-word strings: location=San Francisco → location="San Francisco"
+    - Bare list values: values=1,2,3, bins=5 → values="1,2,3", bins=5
+    - JSON arrays/objects: items=["a","b"] → items='["a","b"]'
+    - Single quotes: name='test' → name="test"
+    - Boolean normalization: True → true
+    - Unclosed mod parentheses
+    """
     # Find ::mod(...) content
-    mod_match = re.search(r"::mod\((.+)\)", line)
+    mod_match = re.search(r'::mod\((.+)\)\s*$', line)
     if not mod_match:
-        return line
+        # Try unclosed mod: ::mod(... without closing )
+        mod_match = re.search(r'::mod\((.+)$', line)
+        if not mod_match:
+            return line
+        # Close it
+        line = line.rstrip() + ")"
+        mod_match = re.search(r'::mod\((.+)\)\s*$', line)
+        if not mod_match:
+            return line
 
     mod_content = mod_match.group(1)
+    prefix = line[:mod_match.start()]
+
+    # Smart-tokenize into key=value pairs
+    pairs = _split_mod_pairs(mod_content)
+    if not pairs:
+        return line
+
     new_pairs = []
     changed = False
 
-    for pair in re.finditer(r"(\w+)\s*=\s*([^,\)]+)", mod_content):
-        key = pair.group(1)
-        val = pair.group(2).strip()
+    for key, val in pairs:
+        val = val.strip()
+        original_pair = f"{key}={val}"
 
-        # Skip already quoted, numeric, or boolean
-        if val.startswith('"') or val.startswith("'"):
-            new_pairs.append(f'{key}={val}')
-            continue
-        if re.match(r"^-?\d+\.?\d*$", val):
-            new_pairs.append(f"{key}={val}")
-            continue
-        if val.lower() in ("true", "false"):
-            new_pairs.append(f"{key}={val}")
+        # Already double-quoted → keep
+        if val.startswith('"') and val.endswith('"'):
+            new_pairs.append(original_pair)
             continue
 
-        # Needs quoting
+        # Single-quoted → convert to double
+        if val.startswith("'") and val.endswith("'"):
+            fixed_val = '"' + val[1:-1] + '"'
+            repairs.append(RepairAction(
+                type="fix_single_quotes",
+                line=line_num,
+                original=original_pair,
+                repaired=f'{key}={fixed_val}',
+                description=f"Converted single quotes to double quotes for '{key}'",
+            ))
+            new_pairs.append(f'{key}={fixed_val}')
+            changed = True
+            continue
+
+        # JSON array [...] → quote the whole thing
+        if val.startswith('[') and val.endswith(']'):
+            inner = val[1:-1].replace('"', '\\"')
+            fixed = f'{key}="[{inner}]"'
+            repairs.append(RepairAction(
+                type="quote_json_array",
+                line=line_num,
+                original=original_pair,
+                repaired=fixed,
+                description=f"Quoted JSON array value for '{key}'",
+            ))
+            new_pairs.append(fixed)
+            changed = True
+            continue
+
+        # JSON object {...} → quote
+        if val.startswith('{') and val.endswith('}'):
+            inner = val[1:-1].replace('"', '\\"')
+            fixed = f'{key}="{{{inner}}}"'
+            repairs.append(RepairAction(
+                type="quote_json_object",
+                line=line_num,
+                original=original_pair,
+                repaired=fixed,
+                description=f"Quoted JSON object value for '{key}'",
+            ))
+            new_pairs.append(fixed)
+            changed = True
+            continue
+
+        # Tuple (...) → quote
+        if val.startswith('(') and val.endswith(')'):
+            inner = val[1:-1].replace('"', '\\"')
+            fixed = f'{key}="({inner})"'
+            repairs.append(RepairAction(
+                type="quote_tuple",
+                line=line_num,
+                original=original_pair,
+                repaired=fixed,
+                description=f"Quoted tuple value for '{key}'",
+            ))
+            new_pairs.append(fixed)
+            changed = True
+            continue
+
+        # Pure numeric — but quote if it's a str-typed Modifier field
+        # (e.g. time=5 → time="5", otherwise Pydantic rejects int for Optional[str])
+        if re.match(r'^-?\d+\.?\d*$', val):
+            if key in _STR_TYPED_MODIFIER_FIELDS:
+                fixed = f'{key}="{val}"'
+                repairs.append(RepairAction(
+                    type="quote_reserved_field",
+                    line=line_num,
+                    original=original_pair,
+                    repaired=fixed,
+                    description=f"Quoted numeric value for str-typed field '{key}'",
+                ))
+                new_pairs.append(fixed)
+                changed = True
+            else:
+                new_pairs.append(original_pair)
+            continue
+
+        # Boolean — normalize to lowercase
+        if val.lower() in ('true', 'false'):
+            if val != val.lower():
+                repairs.append(RepairAction(
+                    type="fix_boolean_case",
+                    line=line_num,
+                    original=original_pair,
+                    repaired=f'{key}={val.lower()}',
+                    description=f"Normalized boolean case for '{key}': {val} → {val.lower()}",
+                ))
+                changed = True
+            new_pairs.append(f'{key}={val.lower()}')
+            continue
+
+        # Contains comma → bare list value, quote it
+        if ',' in val:
+            fixed = f'{key}="{val}"'
+            repairs.append(RepairAction(
+                type="quote_list_value",
+                line=line_num,
+                original=original_pair,
+                repaired=fixed,
+                description=f"Quoted comma-separated list value for '{key}'",
+            ))
+            new_pairs.append(fixed)
+            changed = True
+            continue
+
+        # Unquoted string (has spaces, special chars, or is just text)
+        fixed = f'{key}="{val}"'
         repairs.append(RepairAction(
             type="quote_string",
             line=line_num,
-            original=f"{key}={val}",
-            repaired=f'{key}="{val}"',
+            original=original_pair,
+            repaired=fixed,
             description=f"Quoted unquoted string value for '{key}'",
         ))
-        new_pairs.append(f'{key}="{val}"')
+        new_pairs.append(fixed)
         changed = True
 
     if changed:
-        new_mod = "::mod(" + ", ".join(new_pairs) + ")"
-        prefix = line[:mod_match.start()]
-        suffix = line[mod_match.end():]
-        return prefix + new_mod + suffix
+        return prefix + "::mod(" + ", ".join(new_pairs) + ")"
+
+    # Even if no changes, reconstruct with proper tokenization
+    # (fixes cases where original comma splitting was ambiguous)
+    reconstructed = prefix + "::mod(" + ", ".join(f"{k}={v.strip()}" for k, v in pairs) + ")"
+    if reconstructed != line:
+        return reconstructed
 
     return line
+
+
+def _split_mod_pairs(content: str) -> List[Tuple[str, str]]:
+    """Split mod() content into (key, value) pairs, respecting nesting.
+
+    Instead of naively splitting on commas, identifies key=value boundaries
+    by looking for `identifier=` patterns at bracket-depth 0. Handles:
+    - Nested brackets: items=["a","b"] stays as one value
+    - Nested braces: area={"w": 20} stays as one value
+    - Nested parens: teams=("A","B") stays as one value
+    - Quoted strings with commas: desc="a, b" stays as one value
+    - Bare lists: values=1,2,3, bins=5 → values="1,2,3" and bins=5
+    - Mid-value apostrophes: text=It's great → not confused as quote start
+
+    Returns:
+        List of (key, value) tuples.
+    """
+    # Find all key= positions at depth 0
+    key_positions = []  # (start_of_key, end_of_equals, key_name)
+
+    i = 0
+    depth_bracket = 0   # []
+    depth_brace = 0     # {}
+    depth_paren = 0     # ()
+    in_quote = False
+    quote_char = None
+
+    while i < len(content):
+        c = content[i]
+
+        # Track quotes — only enter quote mode if the quote follows '='
+        # (possibly with whitespace). This prevents mid-value apostrophes
+        # like "It's" from triggering quote mode.
+        if c in ('"', "'") and (i == 0 or content[i-1] != '\\'):
+            if not in_quote:
+                # Check if this quote is right after = (value start)
+                j = i - 1
+                while j >= 0 and content[j] == ' ':
+                    j -= 1
+                if j >= 0 and content[j] == '=':
+                    in_quote = True
+                    quote_char = c
+                # else: stray quote in unquoted value — ignore
+            elif c == quote_char:
+                in_quote = False
+            i += 1
+            continue
+
+        if in_quote:
+            i += 1
+            continue
+
+        # Track nesting
+        if c == '[':
+            depth_bracket += 1
+        elif c == ']':
+            depth_bracket = max(0, depth_bracket - 1)
+        elif c == '{':
+            depth_brace += 1
+        elif c == '}':
+            depth_brace = max(0, depth_brace - 1)
+        elif c == '(':
+            depth_paren += 1
+        elif c == ')':
+            depth_paren = max(0, depth_paren - 1)
+
+        # At depth 0, look for key= pattern
+        if depth_bracket == 0 and depth_brace == 0 and depth_paren == 0:
+            if c == '=' and i > 0:
+                # Walk back to find key name start
+                j = i - 1
+                while j >= 0 and content[j] == ' ':
+                    j -= 1
+                key_end = j + 1
+                while j >= 0 and re.match(r'[\w]', content[j]):
+                    j -= 1
+                key_start = j + 1
+
+                if key_start < key_end:
+                    key_name = content[key_start:key_end]
+                    key_positions.append((key_start, i + 1, key_name))
+
+        i += 1
+
+    if not key_positions:
+        return []
+
+    # Extract values: from end_of_equals to start_of_next_key (minus comma/space)
+    pairs = []
+    for idx, (key_start, val_start, key_name) in enumerate(key_positions):
+        if idx + 1 < len(key_positions):
+            val_end = key_positions[idx + 1][0]
+            # Strip trailing comma and whitespace
+            raw_val = content[val_start:val_end].rstrip()
+            if raw_val.endswith(','):
+                raw_val = raw_val[:-1].rstrip()
+        else:
+            raw_val = content[val_start:].rstrip()
+
+        pairs.append((key_name, raw_val))
+
+    return pairs
 
 
 def _clamp_values(line: str, line_num: int, repairs: List[RepairAction]) -> str:

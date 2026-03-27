@@ -40,7 +40,7 @@ from .reader import stream_parse, STLReader, ReaderStats
 # Utilities (public)
 from ._utils import sanitize_anchor_name
 
-__version__ = "1.8.2"
+__version__ = "1.8.3"
 
 __all__ = [
     # Main parsing functions

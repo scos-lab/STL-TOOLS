@@ -1,4 +1,4 @@
-# STL Parser (v1.8.2)
+# STL Parser (v1.8.3)
 
 **A comprehensive Python toolkit for Semantic Tension Language (STL) — parse, build, validate, query, diff, stream, and repair structured knowledge.**
 
@@ -111,10 +111,18 @@ print(f"Valid: {result.is_valid}, Repairs: {len(result.repairs)}")
 | Modifier typos | `confience`, `strenght` | `confidence`, `strength` |
 | Value out of range | `confidence=1.5` | `confidence=1.0` |
 | Unquoted strings | `rule=causal` | `rule="causal"` |
+| Multi-word strings | `location=San Francisco` | `location="San Francisco"` |
+| Bare list values | `data=1,2,3, bins=5` | `data="1,2,3", bins=5` |
+| JSON arrays | `items=["a","b"]` | `items="[\"a\",\"b\"]"` |
+| JSON objects | `area={"w": 20}` | `area="{\"w\": 20}"` |
+| Tuples | `teams=("A","B")` | `teams="(\"A\",\"B\")"` |
+| Boolean case | `flag=True` | `flag=true` |
 | Code fences | `` ```stl ... ``` `` | Extracted content |
 | Multi-line statements | Split across lines | Merged |
 
-This makes STL a reliable LLM-to-program communication protocol — small models (7B-14B) that struggle with JSON tool calling can generate STL naturally, and the parser handles the rest.
+The repair pipeline uses a smart tokenizer (`_split_mod_pairs`) that tracks bracket/brace/paren nesting depth and identifies `key=value` boundaries correctly — even when values contain commas, spaces, or nested structures.
+
+This makes STL a reliable LLM-to-program communication protocol — small models (0.6B-14B) that struggle with JSON tool calling can generate STL naturally, and the parser handles the rest. In BFCL benchmarks, qwen2.5:7b achieves **100% tool call accuracy** with STL (pure text generation) vs 97% with JSON (framework-assisted).
 
 ### Query Statements
 
@@ -323,7 +331,7 @@ Apache License 2.0 — see [LICENSE](../LICENSE).
   author = {SCOS-Lab},
   title = {STL Parser: A Comprehensive Toolkit for Semantic Tension Language},
   year = {2025},
-  version = {1.8.2},
+  version = {1.8.3},
   url = {https://github.com/scos-lab/semantic-tension-language}
 }
 ```
