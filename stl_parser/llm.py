@@ -242,24 +242,401 @@ def repair(text: str) -> Tuple[str, List[RepairAction]]:
         # 1. Fix spaces in anchor names: [Heavy Rain] → [Heavy_Rain]
         line = _fix_anchor_spaces(line, i + 1, repairs)
 
-        # 2. Fix missing :: prefix on mod()
+        # 2. Sanitize illegal characters in anchor names: & → _and_, $ → removed, etc.
+        line = _fix_anchor_illegal_chars(line, i + 1, repairs)
+
+        # 3. Truncate overlong anchor names (>64 chars)
+        line = _fix_anchor_length(line, i + 1, repairs)
+
+        # 4. Fix broken anchor brackets: [Name ::mod( → [Name] ::mod(
+        line = _fix_broken_anchor_bracket(line, i + 1, repairs)
+
+        # 5. Fix = in anchor names: [Cue=Daily_Commute] → [Cue_Daily_Commute]
+        line = _fix_anchor_equals(line, i + 1, repairs)
+
+        # 6. Fix incomplete ::mod without () — e.g. "::mod ::mod(...)"
+        line = _fix_incomplete_mod(line, i + 1, repairs)
+
+        # 6. Fix missing :: prefix on mod()
         line = _fix_mod_prefix(line, i + 1, repairs)
 
-        # 3. Fix missing brackets on anchors
+        # 7. Fix missing brackets on anchors
         line = _fix_missing_brackets(line, i + 1, repairs)
 
-        # 4. Fix unquoted string values in modifiers
+        # 8. Fix unclosed quotes in modifier values
+        line = _fix_unclosed_quotes(line, i + 1, repairs)
+
+        # 9. Remove orphan keys (key without =value) in modifiers
+        line = _fix_orphan_keys(line, i + 1, repairs)
+
+        # 10. Fix unquoted string values in modifiers
         line = _fix_unquoted_strings(line, i + 1, repairs)
 
-        # 5. Fix common typos in modifier keys (before clamp, so corrected keys get clamped)
+        # 11. Fix common typos in modifier keys (before clamp, so corrected keys get clamped)
         line = _fix_typos(line, i + 1, repairs)
 
-        # 6. Clamp out-of-range numeric values
+        # 12. Fix numeric fields that got quoted: confidence="0.95" → confidence=0.95
+        line = _fix_quoted_numerics(line, i + 1, repairs)
+
+        # 13. Clamp out-of-range numeric values
         line = _clamp_values(line, i + 1, repairs)
 
         repaired_lines.append(line)
 
     return "\n".join(repaired_lines), repairs
+
+
+# Character substitutions for anchor names
+_ANCHOR_CHAR_SUBS = {
+    "&": "_and_",
+    "+": "_plus_",
+    "$": "",
+    "%": "_pct_",
+    "'": "",
+    "\u2019": "",   # right single quote '
+    "\u2018": "",   # left single quote '
+    "#": "_num_",
+    "@": "_at_",
+    "!": "",
+    "?": "",
+    "(": "",
+    ")": "",
+    "/": "_",
+    "\\": "_",
+    ",": "_",
+    ".": "_",
+    ";": "_",
+}
+
+# Maximum allowed anchor name length
+_MAX_ANCHOR_LEN = 64
+
+
+def _fix_anchor_illegal_chars(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Sanitize illegal characters in anchor names.
+
+    Replaces characters not allowed in STL identifiers (like &, $, ', +)
+    with safe alternatives. Only operates on brackets BEFORE ::mod().
+    """
+    mod_idx = line.find("::mod(")
+    if mod_idx >= 0:
+        anchor_part = line[:mod_idx]
+        mod_part = line[mod_idx:]
+    else:
+        anchor_part = line
+        mod_part = ""
+
+    def _sanitize(m: re.Match) -> str:
+        name = m.group(1)
+        original_name = name
+
+        # Fix multiple colons (ratio patterns like 1:1:1) — keep only
+        # single namespace colon, replace others with underscore
+        colon_count = name.count(':')
+        if colon_count > 1:
+            # Replace all colons with underscore (namespace will be lost,
+            # but multiple colons are invalid anyway)
+            name = name.replace(':', '_')
+
+        # Apply character substitutions
+        for char, replacement in _ANCHOR_CHAR_SUBS.items():
+            if char in name:
+                name = name.replace(char, replacement)
+
+        # Clean up resulting artifacts: multiple underscores, leading/trailing underscores
+        name = re.sub(r"_+", "_", name).strip("_")
+
+        # Ensure name starts with a word character (not digit-only after cleanup)
+        if name and not re.match(r"[A-Za-z_\u4e00-\u9fff\u0600-\u06ff]", name):
+            name = "_" + name
+
+        if name != original_name:
+            repairs.append(RepairAction(
+                type="fix_anchor_chars",
+                line=line_num,
+                original=f"[{original_name}]",
+                repaired=f"[{name}]",
+                description=f"Sanitized illegal chars in anchor: [{original_name}] → [{name}]",
+            ))
+
+        return f"[{name}]"
+
+    anchor_part = re.sub(r"\[([^\]]+)\]", _sanitize, anchor_part)
+    return anchor_part + mod_part
+
+
+def _fix_anchor_length(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Truncate anchor names exceeding 64 characters.
+
+    Truncates at the last underscore boundary before the limit to avoid
+    cutting words mid-way. Preserves ::mod() portion untouched.
+    """
+    mod_idx = line.find("::mod(")
+    if mod_idx >= 0:
+        anchor_part = line[:mod_idx]
+        mod_part = line[mod_idx:]
+    else:
+        anchor_part = line
+        mod_part = ""
+
+    def _truncate(m: re.Match) -> str:
+        name = m.group(1)
+        if len(name) <= _MAX_ANCHOR_LEN:
+            return m.group(0)
+
+        # Try to truncate at last underscore before limit
+        truncated = name[:_MAX_ANCHOR_LEN]
+        last_underscore = truncated.rfind("_")
+        if last_underscore > _MAX_ANCHOR_LEN // 2:
+            truncated = truncated[:last_underscore]
+
+        repairs.append(RepairAction(
+            type="truncate_anchor",
+            line=line_num,
+            original=f"[{name}]",
+            repaired=f"[{truncated}]",
+            description=f"Truncated anchor name from {len(name)} to {len(truncated)} chars",
+        ))
+        return f"[{truncated}]"
+
+    anchor_part = re.sub(r"\[([^\]]+)\]", _truncate, anchor_part)
+    return anchor_part + mod_part
+
+
+def _fix_broken_anchor_bracket(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Fix anchor names missing their closing bracket.
+
+    Handles cases where ``]`` was lost (often due to LLM truncation):
+    - ``[Name ::mod(...)`` → ``[Name] ::mod(...)``
+    - ``-> [ ::mod(...)`` → removes the empty anchor (drops the line)
+    - ``:: ::mod(...)`` → ``::mod(...)``
+    """
+    # Pattern 1: :: ::mod( (with possible spaces)
+    if re.search(r'::\s+::mod\(', line):
+        new_line = re.sub(r'::\s+::mod\(', '::mod(', line)
+        if new_line != line:
+            repairs.append(RepairAction(
+                type="fix_broken_anchor",
+                line=line_num,
+                original=":: ::mod(",
+                repaired="::mod(",
+                description="Removed stray :: before ::mod(",
+            ))
+            line = new_line
+
+    # Pattern 2: [Name ::mod( → [Name] ::mod(
+    match = re.search(r'\[([^\]\[]+?)\s+(::mod\()', line)
+    if match:
+        name = match.group(1).strip()
+        if name and re.match(r'^[\w\-\u4e00-\u9fff]+$', name):
+            new_line = line[:match.start()] + f'[{name}] {match.group(2)}' + line[match.end():]
+            repairs.append(RepairAction(
+                type="fix_broken_anchor",
+                line=line_num,
+                original=f"[{name} ::mod(",
+                repaired=f"[{name}] ::mod(",
+                description=f"Inserted missing ] after anchor name '{name}'",
+            ))
+            line = new_line
+
+    # Pattern 3: -> [ ::mod( → empty anchor, drop the whole statement
+    if re.search(r'->\s*\[\s*::mod\(', line) or re.search(r'->\s*\[\s*\]', line):
+        repairs.append(RepairAction(
+            type="fix_broken_anchor",
+            line=line_num,
+            original=line[:60],
+            repaired="(removed)",
+            description="Removed statement with empty anchor name",
+        ))
+        return "# (removed: empty anchor)"
+
+    return line
+
+
+def _fix_anchor_equals(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Replace = in anchor names with underscore.
+
+    Handles cases like ``[Cue=Daily_Commute]`` → ``[Cue_Daily_Commute]``.
+    Only operates on brackets BEFORE ``::mod()``.
+    """
+    mod_idx = line.find("::mod(")
+    if mod_idx >= 0:
+        anchor_part = line[:mod_idx]
+        mod_part = line[mod_idx:]
+    else:
+        anchor_part = line
+        mod_part = ""
+
+    def _fix_eq(m: re.Match) -> str:
+        name = m.group(1)
+        if "=" not in name:
+            return m.group(0)
+        fixed = name.replace("=", "_")
+        repairs.append(RepairAction(
+            type="fix_anchor_equals",
+            line=line_num,
+            original=f"[{name}]",
+            repaired=f"[{fixed}]",
+            description=f"Replaced = in anchor: [{name}] → [{fixed}]",
+        ))
+        return f"[{fixed}]"
+
+    anchor_part = re.sub(r"\[([^\]]+)\]", _fix_eq, anchor_part)
+    return anchor_part + mod_part
+
+
+def _fix_incomplete_mod(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Remove incomplete ``::mod`` fragments without parentheses.
+
+    Handles LLM-generated lines like ``[A] -> [B] ::mod ::mod(timestamp=...)``,
+    where the first ``::mod`` has no ``()``. Removes the bare fragment.
+    """
+    # Pattern: ::mod followed by space/whitespace then ::mod( — remove the first one
+    pattern = r'::mod\s+::mod\('
+    if re.search(pattern, line):
+        new_line = re.sub(r'::mod\s+(::mod\()', r'\1', line)
+        if new_line != line:
+            repairs.append(RepairAction(
+                type="fix_incomplete_mod",
+                line=line_num,
+                original="::mod ::mod(",
+                repaired="::mod(",
+                description="Removed incomplete ::mod fragment (no parentheses)",
+            ))
+            return new_line
+
+    # Also handle: ::mod without ( at end of anchor section (before nothing or newline)
+    # e.g. "[A] -> [B] ::mod" (completely empty mod)
+    pattern2 = r'::mod\s*$'
+    if re.search(pattern2, line):
+        new_line = re.sub(pattern2, '', line).rstrip()
+        if new_line != line:
+            repairs.append(RepairAction(
+                type="fix_incomplete_mod",
+                line=line_num,
+                original="::mod",
+                repaired="(removed)",
+                description="Removed trailing ::mod with no content",
+            ))
+            return new_line
+
+    return line
+
+
+def _fix_orphan_keys(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Remove orphan modifier keys that have no ``=value``.
+
+    Handles lines like ``::mod(confidence=0.95, description, timestamp="...")``,
+    where ``description`` appears without ``=value``. The orphan key is removed
+    to prevent ``_split_mod_pairs`` from merging it into the previous value.
+    """
+    mod_match = re.search(r'::mod\((.+)\)\s*$', line)
+    if not mod_match:
+        return line
+
+    mod_content = mod_match.group(1)
+    prefix = line[:mod_match.start()]
+
+    # Find orphan keys: a comma-separated identifier not followed by =
+    # Pattern: ", identifier," or ", identifier)" where identifier has no =
+    fixed = re.sub(
+        r',\s*([a-z_]+)\s*(?=,|\))',
+        lambda m: (
+            m.group(0) if '=' in mod_content[mod_content.find(m.group(1)):mod_content.find(m.group(1)) + len(m.group(1)) + 2]
+            else ''
+        ),
+        mod_content,
+    )
+
+    # Simpler approach: split on comma, check each part for key=value pattern
+    parts = []
+    removed = False
+    # Use _split_mod_pairs-style logic but simpler
+    raw_parts = mod_content.split(',')
+    i = 0
+    while i < len(raw_parts):
+        part = raw_parts[i].strip()
+        if not part:
+            i += 1
+            continue
+
+        # Check if this part has = in it (key=value)
+        if '=' in part:
+            # Collect continuation parts if value has commas inside quotes
+            full_part = part
+            # Count quotes to check if we're in an unclosed string
+            while full_part.count('"') % 2 != 0 and i + 1 < len(raw_parts):
+                i += 1
+                full_part += ',' + raw_parts[i]
+            parts.append(full_part)
+        else:
+            # Orphan key — no = sign. Remove it.
+            removed = True
+            repairs.append(RepairAction(
+                type="remove_orphan_key",
+                line=line_num,
+                original=part,
+                repaired="(removed)",
+                description=f"Removed orphan modifier key '{part}' (no value assigned)",
+            ))
+        i += 1
+
+    if removed:
+        new_mod = ", ".join(parts)
+        return prefix + "::mod(" + new_mod + ")"
+
+    return line
+
+
+def _fix_unclosed_quotes(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Fix unclosed quote in modifier string values.
+
+    Detects lines where a modifier string value (e.g. description="...")
+    is missing its closing quote, causing the next key=value pair to be
+    absorbed into the string. Fixes by inserting a closing quote before
+    the next ``key=`` pattern.
+
+    Common LLM error:
+        description="text with comma, timestamp="2023-01-01"
+        → description="text with comma", timestamp="2023-01-01"
+    """
+    mod_match = re.search(r'::mod\(', line)
+    if not mod_match:
+        return line
+
+    mod_start = mod_match.end()
+    mod_content = line[mod_start:]
+
+    # Quick check: if quotes are balanced, nothing to fix
+    quote_count = mod_content.count('"')
+    if quote_count % 2 == 0:
+        return line
+
+    # Find unclosed quote: an opening " whose content runs into a `key=` pattern
+    # Pattern: value starts with ", has no closing ", but then we see `, identifier=`
+    # Fix: insert " before the `, identifier=` part
+    fixed = re.sub(
+        r'(="[^"]*?)(,\s*)((?:timestamp|confidence|rule|strength|source|author|'
+        r'domain|description|certainty|lesson|cause|effect|time|intent|version|'
+        r'conditionality|focus|perspective|mood|modality|emotion|intensity|'
+        r'valence|priority|scope|frequency|duration|tense|location|necessity|'
+        r'alignment|value|path)\s*=)',
+        r'\1"\2\3',
+        mod_content,
+    )
+
+    if fixed != mod_content:
+        new_line = line[:mod_start] + fixed
+        repairs.append(RepairAction(
+            type="fix_unclosed_quote",
+            line=line_num,
+            original=line[mod_start:mod_start + 60] + "...",
+            repaired=fixed[:60] + "...",
+            description="Inserted missing closing quote in modifier value",
+        ))
+        return new_line
+
+    return line
 
 
 def _fix_anchor_spaces(line: str, line_num: int, repairs: List[RepairAction]) -> str:
@@ -651,6 +1028,51 @@ def _split_mod_pairs(content: str) -> List[Tuple[str, str]]:
         pairs.append((key_name, raw_val))
 
     return pairs
+
+
+def _fix_quoted_numerics(line: str, line_num: int, repairs: List[RepairAction]) -> str:
+    """Fix numeric modifier fields that were incorrectly quoted.
+
+    Handles cases like ``confidence="0.95"`` → ``confidence=0.95``
+    and ``confidence=""`` → removes the empty field.
+    Also cleans trailing commas inside quotes: ``confidence="0.95,"`` → ``confidence=0.95``.
+    """
+    for field in _CLAMPABLE_FIELDS:
+        # Match field="..." pattern
+        pattern = rf'({field}\s*=\s*)"([^"]*)"'
+        match = re.search(pattern, line)
+        if match:
+            prefix = match.group(1)
+            inner = match.group(2).strip().rstrip(',').strip()
+
+            if not inner:
+                # Empty value — remove the whole field
+                # Remove "field="" " and any surrounding comma
+                line = re.sub(rf',?\s*{field}\s*=\s*""', '', line)
+                line = re.sub(rf'{field}\s*=\s*""\s*,?\s*', '', line)
+                repairs.append(RepairAction(
+                    type="remove_empty_numeric",
+                    line=line_num,
+                    original=f'{field}=""',
+                    repaired="(removed)",
+                    description=f"Removed empty {field} field",
+                ))
+            elif re.match(r'^-?\d+\.?\d*$', inner):
+                # Valid number inside quotes — unquote
+                new_val = f'{prefix}{inner}'
+                line = line[:match.start()] + new_val + line[match.end():]
+                repairs.append(RepairAction(
+                    type="unquote_numeric",
+                    line=line_num,
+                    original=f'{field}="{match.group(2)}"',
+                    repaired=f'{field}={inner}',
+                    description=f"Unquoted numeric value for '{field}'",
+                ))
+
+    # Clean up leading comma after removed fields: ::mod(, key=...) → ::mod(key=...)
+    line = re.sub(r'::mod\(\s*,\s*', '::mod(', line)
+
+    return line
 
 
 def _clamp_values(line: str, line_num: int, repairs: List[RepairAction]) -> str:

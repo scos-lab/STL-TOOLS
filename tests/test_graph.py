@@ -196,10 +196,137 @@ class TestSTLGraph:
         ]
         parse_result = ParseResult(statements=stmts, is_valid=True)
         stl_graph = STLGraph(parse_result)
-        
+
         # 'has_color' is in default functional relations
         metrics = stl_graph.calculate_tension_metrics()
-        
+
         assert metrics["conflict_count"] == 1
         assert abs(metrics["total_tension_score"] - 1.5) < 0.001
         assert abs(metrics["avg_tension_per_conflict"] - 1.5) < 0.001
+
+
+class TestExtractChains:
+    """Tests for extract_chains and format_chains."""
+
+    def test_linear_chain(self, sample_parse_result_linear):
+        """A→B→C→D should produce one chain of length 3."""
+        g = STLGraph(sample_parse_result_linear)
+        chains = g.extract_chains(min_length=1)
+        assert len(chains) == 1
+        assert chains[0] == ["[A]", "[B]", "[C]", "[D]"]
+
+    def test_linear_chain_min_length_filter(self, sample_parse_result_linear):
+        """min_length=3 should still include A→B→C→D (3 edges)."""
+        g = STLGraph(sample_parse_result_linear)
+        assert len(g.extract_chains(min_length=3)) == 1
+        assert len(g.extract_chains(min_length=4)) == 0
+
+    def test_branching_produces_multiple_chains(self):
+        """A→B→C and A→B→D should give two chains."""
+        stmts = [
+            Statement(source=Anchor(name="A"), target=Anchor(name="B")),
+            Statement(source=Anchor(name="B"), target=Anchor(name="C")),
+            Statement(source=Anchor(name="B"), target=Anchor(name="D")),
+        ]
+        pr = ParseResult(statements=stmts, is_valid=True)
+        g = STLGraph(pr)
+        chains = g.extract_chains(min_length=1)
+        paths_as_tuples = {tuple(c) for c in chains}
+        assert ("[A]", "[B]", "[C]") in paths_as_tuples
+        assert ("[A]", "[B]", "[D]") in paths_as_tuples
+
+    def test_merge_produces_multiple_chains(self):
+        """A→C and B→C should give two single-edge chains (min_length=1)."""
+        stmts = [
+            Statement(source=Anchor(name="A"), target=Anchor(name="C")),
+            Statement(source=Anchor(name="B"), target=Anchor(name="C")),
+        ]
+        pr = ParseResult(statements=stmts, is_valid=True)
+        g = STLGraph(pr)
+        chains = g.extract_chains(min_length=1)
+        assert len(chains) == 2
+
+    def test_diamond_graph(self):
+        """A→B→D and A→C→D should give two chains."""
+        stmts = [
+            Statement(source=Anchor(name="A"), target=Anchor(name="B")),
+            Statement(source=Anchor(name="B"), target=Anchor(name="D")),
+            Statement(source=Anchor(name="A"), target=Anchor(name="C")),
+            Statement(source=Anchor(name="C"), target=Anchor(name="D")),
+        ]
+        pr = ParseResult(statements=stmts, is_valid=True)
+        g = STLGraph(pr)
+        chains = g.extract_chains(min_length=1)
+        paths_as_tuples = {tuple(c) for c in chains}
+        assert ("[A]", "[B]", "[D]") in paths_as_tuples
+        assert ("[A]", "[C]", "[D]") in paths_as_tuples
+
+    def test_disconnected_components(self):
+        """Two independent chains should both be found."""
+        stmts = [
+            Statement(source=Anchor(name="A"), target=Anchor(name="B")),
+            Statement(source=Anchor(name="B"), target=Anchor(name="C")),
+            Statement(source=Anchor(name="X"), target=Anchor(name="Y")),
+            Statement(source=Anchor(name="Y"), target=Anchor(name="Z")),
+        ]
+        pr = ParseResult(statements=stmts, is_valid=True)
+        g = STLGraph(pr)
+        chains = g.extract_chains(min_length=1)
+        assert len(chains) == 2
+
+    def test_empty_graph(self):
+        """Empty graph should return no chains."""
+        g = STLGraph()
+        assert g.extract_chains() == []
+
+    def test_single_edge_below_default_min(self):
+        """A single edge should be excluded by default min_length=2."""
+        stmts = [Statement(source=Anchor(name="A"), target=Anchor(name="B"))]
+        pr = ParseResult(statements=stmts, is_valid=True)
+        g = STLGraph(pr)
+        assert len(g.extract_chains()) == 0  # default min_length=2
+        assert len(g.extract_chains(min_length=1)) == 1
+
+    def test_format_chains_output(self, sample_parse_result_linear):
+        """format_chains should produce readable text."""
+        g = STLGraph(sample_parse_result_linear)
+        chains = g.extract_chains(min_length=1)
+        text = STLGraph.format_chains(chains)
+        assert "Chain 1:" in text
+        assert "[A] → [B] → [C] → [D]" in text
+
+    def test_format_chains_empty(self):
+        """format_chains on empty list should say 'No chains found.'"""
+        assert STLGraph.format_chains([]) == "No chains found."
+
+    def test_from_networkx(self):
+        """from_networkx should wrap an existing DiGraph for chain extraction."""
+        import networkx as nx
+        g = nx.DiGraph()
+        g.add_edges_from([("A", "B"), ("B", "C"), ("C", "D")])
+        stl_graph = STLGraph.from_networkx(g)
+        chains = stl_graph.extract_chains(min_length=1)
+        assert len(chains) == 1
+        assert chains[0] == ["A", "B", "C", "D"]
+
+    def test_from_networkx_multidigraph(self):
+        """from_networkx should also accept MultiDiGraph."""
+        import networkx as nx
+        g = nx.MultiDiGraph()
+        g.add_edges_from([("X", "Y"), ("Y", "Z")])
+        stl_graph = STLGraph.from_networkx(g)
+        chains = stl_graph.extract_chains(min_length=1)
+        assert len(chains) == 1
+        assert chains[0] == ["X", "Y", "Z"]
+
+    def test_with_namespaces(self):
+        """Chains should work with namespaced anchors."""
+        stmts = [
+            Statement(source=Anchor(name="Energy", namespace="Physics"), target=Anchor(name="Mass", namespace="Physics")),
+            Statement(source=Anchor(name="Mass", namespace="Physics"), target=Anchor(name="Gravity")),
+        ]
+        pr = ParseResult(statements=stmts, is_valid=True)
+        g = STLGraph(pr)
+        chains = g.extract_chains(min_length=1)
+        assert len(chains) == 1
+        assert chains[0] == ["[Physics:Energy]", "[Physics:Mass]", "[Gravity]"]

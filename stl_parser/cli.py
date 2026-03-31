@@ -628,6 +628,45 @@ def query(
         handle_error(e)
 
 
+@app.command()
+def chain(
+    file_path: Annotated[Path, typer.Argument(help="Path to the STL file.", exists=True, file_okay=True, dir_okay=False, readable=True)],
+    min_length: Annotated[int, typer.Option("--min", "-m", help="Minimum number of edges in a chain.")] = 2,
+    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: text (default), json.")] = "text",
+):
+    """
+    Extracts and displays all directed chains from an STL file.
+
+    A chain is a maximal path through the graph: [A] → [B] → [C] → ...
+    Useful for visualizing how nodes connect transitively.
+    """
+    try:
+        parse_result = parse_file(file_path)
+
+        if not parse_result.is_valid:
+            console.print("[bold red]STL file has parse errors.[/bold red]")
+            for error in parse_result.errors:
+                console.print(f"  - [red][{error.code}][/red] {error.message} (line {error.line or '?'})")
+            raise typer.Exit(code=1)
+
+        stl_graph = STLGraph(parse_result)
+        chains = stl_graph.extract_chains(min_length=min_length)
+
+        if fmt == "json":
+            print(json.dumps(chains, indent=2, ensure_ascii=False))
+        elif fmt == "text":
+            console.print(STLGraph.format_chains(chains))
+            console.print(f"\n[dim]{len(chains)} chain(s) found[/dim]")
+        else:
+            console.print(f"[bold red]Error:[/bold red] Unsupported format '{fmt}'. Supported: text, json.")
+            raise typer.Exit(code=1)
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        handle_error(e)
+
+
 @app.command(name="diff")
 def diff_command(
     file_a: Annotated[Path, typer.Argument(help="Source STL file (before).", exists=True, file_okay=True, dir_okay=False, readable=True)],

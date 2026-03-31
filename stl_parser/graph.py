@@ -240,15 +240,135 @@ class STLGraph:
             "edges": self.graph.number_of_edges(),
         }
 
+    def extract_chains(self, min_length: int = 2) -> List[List[str]]:
+        """
+        Extracts all maximal directed chains from the graph.
+
+        A chain is a maximal simple path: it starts at a node with in-degree 0
+        (or a branch point) and ends at a node with out-degree 0 (or a merge
+        point). Branches produce separate chains.
+
+        Args:
+            min_length: Minimum number of edges in a chain (default 2, i.e.
+                        at least 3 nodes). Set to 1 to include single-edge
+                        chains as well.
+
+        Returns:
+            A list of chains, where each chain is a list of anchor IDs
+            (e.g. ``["[A]", "[B]", "[C]"]``).
+        """
+        if self.graph.number_of_nodes() == 0:
+            return []
+
+        # Collect source nodes (in-degree 0) — natural chain starts
+        sources = [n for n in self.graph.nodes() if self.graph.in_degree(n) == 0]
+
+        # Collect sink nodes (out-degree 0) — natural chain ends
+        sinks = set(n for n in self.graph.nodes() if self.graph.out_degree(n) == 0)
+
+        # If no source nodes (pure cycles), use all nodes as potential starts
+        if not sources:
+            sources = list(self.graph.nodes())
+
+        chains: List[List[str]] = []
+        seen_chains: set = set()  # deduplicate by tuple
+
+        for src in sources:
+            if sinks:
+                for sink in sinks:
+                    if src == sink:
+                        continue
+                    try:
+                        for path in nx.all_simple_paths(self.graph, src, sink):
+                            key = tuple(path)
+                            if len(path) - 1 >= min_length and key not in seen_chains:
+                                seen_chains.add(key)
+                                chains.append(path)
+                    except nx.NetworkXError:
+                        continue
+            else:
+                # Pure cycle graph — DFS from each node
+                self._dfs_chains(src, [src], set(), chains, seen_chains, min_length)
+
+        # Sort: longest first, then alphabetical
+        chains.sort(key=lambda c: (-len(c), c))
+        return chains
+
+    def _dfs_chains(
+        self,
+        node: str,
+        current_path: List[str],
+        visited: set,
+        chains: List[List[str]],
+        seen_chains: set,
+        min_length: int,
+    ) -> None:
+        """DFS helper for extracting chains in cyclic graphs."""
+        visited.add(node)
+        successors = [s for s in self.graph.successors(node) if s not in visited]
+
+        if not successors:
+            # End of path
+            key = tuple(current_path)
+            if len(current_path) - 1 >= min_length and key not in seen_chains:
+                seen_chains.add(key)
+                chains.append(list(current_path))
+        else:
+            for succ in successors:
+                current_path.append(succ)
+                self._dfs_chains(succ, current_path, visited, chains, seen_chains, min_length)
+                current_path.pop()
+
+        visited.discard(node)
+
+    @staticmethod
+    def format_chains(chains: List[List[str]]) -> str:
+        """
+        Formats extracted chains as human-readable text.
+
+        Args:
+            chains: Output of :meth:`extract_chains`.
+
+        Returns:
+            Formatted string, one chain per line.
+        """
+        if not chains:
+            return "No chains found."
+        lines = []
+        for i, chain in enumerate(chains, 1):
+            lines.append(f"Chain {i}: {' → '.join(chain)}")
+        return "\n".join(lines)
+
     @staticmethod
     def from_parse_result(parse_result: ParseResult) -> 'STLGraph':
         """
         Factory method to create an STLGraph from a ParseResult.
-        
+
         Args:
             parse_result: The ParseResult to convert.
-        
+
         Returns:
             A new STLGraph instance.
         """
         return STLGraph(parse_result)
+
+    @staticmethod
+    def from_networkx(graph: nx.DiGraph) -> 'STLGraph':
+        """
+        Factory method to wrap an existing NetworkX directed graph.
+
+        This allows external systems (e.g. STG) that already have a
+        NetworkX graph to reuse STLGraph's analysis methods like
+        :meth:`extract_chains`, :meth:`find_cycles`, etc.
+
+        Node names are used as-is (no ``[bracket]`` wrapping).
+
+        Args:
+            graph: A NetworkX DiGraph or MultiDiGraph.
+
+        Returns:
+            A new STLGraph instance wrapping the given graph.
+        """
+        stl_graph = STLGraph()
+        stl_graph.graph = graph
+        return stl_graph

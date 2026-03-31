@@ -40,7 +40,7 @@ from .reader import stream_parse, STLReader, ReaderStats
 # Utilities (public)
 from ._utils import sanitize_anchor_name
 
-__version__ = "1.8.3"
+__version__ = "1.9.0"
 
 __all__ = [
     # Main parsing functions
@@ -110,4 +110,20 @@ __all__ = [
     "ReaderStats",
     # Utilities
     "sanitize_anchor_name",
+    # Chain extraction
+    "extract_chains",
 ]
+
+
+def extract_chains(parse_result: ParseResult, min_length: int = 2):
+    """Convenience function: extract chains from a ParseResult.
+
+    Args:
+        parse_result: A valid ParseResult.
+        min_length: Minimum edge count per chain (default 2).
+
+    Returns:
+        List of chains (each chain is a list of anchor ID strings).
+    """
+    g = STLGraph(parse_result)
+    return g.extract_chains(min_length=min_length)

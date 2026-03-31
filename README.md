@@ -1,4 +1,4 @@
-# STL Parser (v1.8.3)
+# STL Parser (v1.9.0)
 
 **A comprehensive Python toolkit for Semantic Tension Language (STL) — parse, build, validate, query, diff, stream, and repair structured knowledge.**
 
@@ -19,23 +19,23 @@
 | **Query & Filter** | `find()`, `filter_statements()`, `select()`, `stl_pointer()` | `jq` / JSONPath |
 | **Diff & Patch** | `stl_diff()`, `stl_patch()`, `diff_to_text()` | `json-diff` / `json-patch` |
 | **Streaming I/O** | `STLEmitter`, `STLReader`, `stream_parse()` | NDJSON streaming |
-| **Graph Analysis** | `STLGraph`, `STLAnalyzer` | N/A (STL-unique) |
+| **Graph Analysis** | `STLGraph`, `STLAnalyzer`, `extract_chains()` | N/A (STL-unique) |
 | **Confidence Decay** | `effective_confidence()`, `decay_report()` | N/A (STL-unique) |
-| **CLI** | 10 commands (validate, convert, query, diff, ...) | `jq` CLI |
+| **CLI** | 11 commands (validate, convert, query, chain, diff, ...) | `jq` CLI |
 
 ## Installation
 
-### From Source
+### From PyPI
 
 ```bash
-git clone https://github.com/scos-lab/semantic-tension-language.git
-cd semantic-tension-language/parser
-pip install -e .
+pip install stl-parser
 ```
 
-### Development Installation
+### From Source (Development)
 
 ```bash
+git clone https://github.com/scos-lab/STL-TOOLS.git
+cd STL-TOOLS
 pip install -e ".[dev]"
 ```
 
@@ -119,6 +119,15 @@ print(f"Valid: {result.is_valid}, Repairs: {len(result.repairs)}")
 | Boolean case | `flag=True` | `flag=true` |
 | Code fences | `` ```stl ... ``` `` | Extracted content |
 | Multi-line statements | Split across lines | Merged |
+| Illegal anchor chars | `[Café & Bar]` | `[Caf_and_Bar]` |
+| Overlong anchor names | 139 chars | Truncated at 64 (word boundary) |
+| Unclosed quotes | `description="text, ts="` | `description="text", ts="` |
+| Orphan keys (no value) | `confidence=0.9, description,` | `confidence=0.9` |
+| Incomplete `::mod` | `::mod ::mod(...)` | `::mod(...)` |
+| Missing `]` on anchor | `[Name ::mod(` | `[Name] ::mod(` |
+| `=` in anchor | `[Cue=Value]` | `[Cue_Value]` |
+| Quoted numerics | `confidence="0.95"` | `confidence=0.95` |
+| Empty numeric fields | `confidence=""` | (removed) |
 
 The repair pipeline uses a smart tokenizer (`_split_mod_pairs`) that tracks bracket/brace/paren nesting depth and identifies `key=value` boundaries correctly — even when values contain commas, spaces, or nested structures.
 
@@ -176,6 +185,24 @@ for stmt in stream_parse("output.stl"):
     print(f"{stmt.source.name} -> {stmt.target.name}")
 ```
 
+### Extract Chains
+
+Discover transitive relationships by extracting all directed chains from STL:
+
+```python
+from stl_parser import parse, extract_chains, STLGraph
+
+result = parse("""
+[Rain] -> [Flooding] ::mod(rule="causal", confidence=0.85)
+[Flooding] -> [Evacuation] ::mod(rule="causal", confidence=0.90)
+[Evacuation] -> [Shelter] ::mod(rule="causal", confidence=0.80)
+""")
+
+chains = extract_chains(result, min_length=1)
+print(STLGraph.format_chains(chains))
+# Chain 1: [Rain] → [Flooding] → [Evacuation] → [Shelter]
+```
+
 ### Confidence Decay
 
 ```python
@@ -192,7 +219,7 @@ print(f"Original: {stmt.modifiers.confidence}, Decayed: {decayed:.4f}")
 
 ## CLI Reference
 
-The `stl` command provides 10 subcommands:
+The `stl` command provides 11 subcommands:
 
 ```bash
 # Validate an STL file
@@ -207,6 +234,10 @@ stl convert input.stl --to rdf --format turtle --output output.ttl
 
 # Graph analysis (nodes, edges, centrality, cycles)
 stl analyze input.stl
+
+# Extract directed chains
+stl chain input.stl
+stl chain input.stl --min 1 --format json
 
 # Build a statement from CLI
 stl build "[Rain]" "[Flooding]" --mod "rule=causal,confidence=0.85"
@@ -248,7 +279,7 @@ stl_parser/                    # 19 modules
 │   └── emitter.py             # STLEmitter — thread-safe streaming writer
 │
 ├── Analysis Layer
-│   ├── graph.py               # STLGraph — NetworkX-based graph construction
+│   ├── graph.py               # STLGraph — graph construction, chain extraction
 │   ├── analyzer.py            # STLAnalyzer — centrality, cycles, statistics
 │   └── decay.py               # Confidence decay with configurable half-life
 │
@@ -259,10 +290,10 @@ stl_parser/                    # 19 modules
 │
 ├── Validation Layer
 │   ├── schema.py              # load_schema(), validate_against_schema(), .stl.schema format
-│   └── llm.py                 # clean(), repair(), validate_llm_output() — 3-stage pipeline
+│   └── llm.py                 # clean(), repair(), validate_llm_output() — 3-stage pipeline (21 repairs)
 │
 └── Interface Layer
-    └── cli.py                 # Typer CLI with 10 commands
+    └── cli.py                 # Typer CLI with 11 commands
 ```
 
 ## Schema Ecosystem
@@ -295,7 +326,7 @@ pip install -e ".[dev]"
 ### Run Tests
 
 ```bash
-pytest tests/                          # Run all 530+ tests
+pytest tests/                          # Run all 540+ tests
 pytest tests/ --cov=stl_parser         # With coverage report
 pytest tests/test_builder.py           # Single module
 pytest tests/ -k "test_query"          # By name pattern
@@ -331,7 +362,7 @@ Apache License 2.0 — see [LICENSE](../LICENSE).
   author = {SCOS-Lab},
   title = {STL Parser: A Comprehensive Toolkit for Semantic Tension Language},
   year = {2025},
-  version = {1.8.3},
+  version = {1.9.0},
   url = {https://github.com/scos-lab/semantic-tension-language}
 }
 ```
