@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.10.1 (2026-08-21)
+
+- Fix: `validate_datetime_format` rejected `Z`-suffixed timestamps on Python 3.9
+  and 3.10 (`datetime.fromisoformat` only accepts a trailing `Z` from 3.11); the
+  `Z` is now normalised to `+00:00` before parsing, matching `decay.py` and the
+  schema engine. Present since 1.7.0; surfaced by the first CI run that actually
+  executed the test suite (see the 1.10.0 CI note).
+- CI: matrix `fail-fast: false`, so one interpreter's failure no longer cancels
+  the rest of the matrix.
+
 ## v1.10.0 (2026-08-21)
 
 ### CI

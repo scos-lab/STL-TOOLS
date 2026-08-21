@@ -164,9 +164,10 @@ def validate_datetime_format(dt_string: str, context: str = "") -> List[STLValid
     else:
         # Try to parse to ensure it's a valid date
         try:
-            # datetime.fromisoformat() in modern Python handles most ISO 8601 formats directly,
-            # including those with timezone offsets (Z or +/-HH:MM).
-            datetime.fromisoformat(dt_string)
+            # datetime.fromisoformat() only accepts a trailing "Z" from Python 3.11;
+            # normalise it to "+00:00" so 3.9/3.10 validate the same strings.
+            normalized = dt_string[:-1] + "+00:00" if dt_string.endswith("Z") else dt_string
+            datetime.fromisoformat(normalized)
         except ValueError as e:
             errors.append(STLValidationError(
                 code=ErrorCode.E112_INVALID_DATETIME_FORMAT,
