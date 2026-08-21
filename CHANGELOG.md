@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## v1.10.0 (2026-08-21)
+
+### CI
+
+- `ci.yml`: the lint step invoked `ruff stl_parser/`, which newer ruff rejects
+  ("unrecognized subcommand"); with fail-fast across the matrix this cancelled
+  every job, so **tests had not actually run in CI since v1.8.x**. Now
+  `ruff check`; lint / black / mypy / Codecov steps are `continue-on-error`
+  (pre-existing lint baseline of ~110 ruff findings is tracked separately),
+  so the job's colour reflects the test suite. GitHub Actions bumped
+  (setup-python v5, upload-artifact v4, codecov-action v4).
 
 ### Schema Engine Hardening (contributed by Scorpse)
 

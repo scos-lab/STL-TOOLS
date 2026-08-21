@@ -56,7 +56,7 @@ from ._utils import sanitize_anchor_name
 try:
     __version__ = version("stl-parser")
 except PackageNotFoundError:
-    __version__ = "1.9.0"
+    __version__ = "1.10.0"
 
 __all__ = [
     # Main parsing functions
