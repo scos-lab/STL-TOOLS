@@ -6,9 +6,10 @@ This module provides tools for statistical analysis of STL ParseResult objects.
 It calculates various metrics and insights from parsed STL statements.
 """
 
+import re
+import statistics
 from collections import Counter
 from typing import Dict, Any, List, Optional
-import statistics
 
 from .models import ParseResult, Statement, AnchorType, PathType
 from .graph import STLGraph # For graph-based metrics

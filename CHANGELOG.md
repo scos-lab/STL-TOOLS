@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Schema Engine Hardening (contributed by Scorpse)
+
+Ported from Scorpse's fork of `scos-lab/semantic-tension-language`
+(branch `feature/software-schema-hardening`), with permission. Design notes
+and original commits by Scorpse (_AdrianTeo).
+
+- **Fail-closed schema parsing**: unknown top-level blocks, anchor keys,
+  constraint keys, and modifier field types now raise `E602` instead of being
+  silently skipped.
+- **Strict primitives**: `integer` fields accept only Python ints (not bool or
+  float); `boolean` fields must be bool; `datetime` fields must be ISO 8601
+  strings. String fields accept a regex constraint
+  (`identifier: string(/[A-Z]+-[0-9]+/)`), matched with `re.fullmatch`.
+- **Typed edge rules**: repeatable
+  `edge { source: [...] relation: [...] target: [...] }` blocks
+  (`SchemaEdgeRule`). When a schema declares edge rules, every statement must
+  match at least one source-type / relation / target-type triple (`E611`);
+  schemas without edge blocks behave exactly as before.
+- **Graph constraints enforced**: `max_chain_length` (`E608`) and
+  `allow_cycles: false` (`E609`) are now enforced (previously parsed but not
+  checked).
+- **Profiles**: `load_profile(path)` loads a `.stl.profile` manifest into a
+  `Dict[namespace, STLSchema]` (missing files, missing or duplicate namespaces
+  are errors); `validate_against_profiles(parse_result, profiles)` routes each
+  statement by source namespace or unique anchor-prefix match, validates
+  cross-namespace targets against every registered profile, applies per-profile
+  `min/max_statements` to the routed subset, and applies the strictest
+  composite graph constraints (cycles rejected if any profile forbids them,
+  smallest `max_chain_length` wins).
+- **Pydantic fidelity**: `to_pydantic` maps enum to `Literal`, datetime to
+  `datetime`, integer to strict `int`, string pattern to a `pattern`
+  constraint; `from_pydantic` recognises `Literal` and `datetime` annotations.
+- **New error codes** `E604`-`E611` with messages and suggestions. Existing
+  schema validation paths now emit the specific codes: document count `E605`,
+  anchor namespace/pattern `E606`, missing required field `E607`, field type
+  mismatch `E604` (range/enum/pattern violations remain `E603`).
+- `load_schema()` on a missing `.schema` / `.stl.schema` path raises `E400`
+  file-not-found instead of parsing the path string as schema text.
+- `W002` ("many digits") no longer fires for structured anchor names that
+  contain `_` or `-` (generated identifiers).
+- `analyzer.py`: add the missing `import re` (reachable `NameError` in anchor
+  type inference).
+- `__version__` is read from the installed distribution metadata, falling back
+  to the project version for uninstalled source checkouts.
+- New public exports: `load_profile`, `validate_against_profiles`.
+
 ## v1.9.0 (2026-03-31)
 
 ### Chain Extraction — Visualize Node Relationships

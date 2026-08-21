@@ -1,0 +1,12 @@
+# Test fixture: composite document spanning all three fixture namespaces.
+# Longest chain (5 edges, exactly the strictest limit):
+#   Metric_Latency -> Alert_HighLatency -> Incident_42 -> Service_API -> Component_Auth -> Endpoint_Login
+[Core:Service_API] -> [Core:Component_Auth] ::mod(relation="contains", version="1.2")
+[Core:Component_Auth] -> [Core:Endpoint_Login] ::mod(relation="exposes")
+[Delivery:Build_42] -> [Delivery:Artifact_API] ::mod(relation="produces", commit="abc1234", status="succeeded")
+[Delivery:Deployment_Prod] -> [Delivery:Artifact_API] ::mod(relation="deploys")
+[Delivery:Deployment_Prod] -> [Core:Service_API] ::mod(relation="deploys_to")
+[Operations:Metric_Latency] -> [Core:Service_API] ::mod(relation="observes", threshold=0.95)
+[Operations:Metric_Latency] -> [Operations:Alert_HighLatency] ::mod(relation="triggers")
+[Operations:Alert_HighLatency] -> [Operations:Incident_42] ::mod(relation="triggers", severity="high")
+[Operations:Incident_42] -> [Core:Service_API] ::mod(relation="affects")

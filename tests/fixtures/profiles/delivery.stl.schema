@@ -1,0 +1,22 @@
+# Test fixture: "Delivery" namespace of the composite profile fixture.
+# Exercises: cross-namespace targets (Service_ anchors live in Core), max_chain_length.
+schema DeliveryFixture v1.0 {
+    namespace "Delivery"
+
+    anchor source { pattern: /(Build|Deployment)_.+/ }
+    anchor target { pattern: /(Build|Deployment|Artifact|Service)_.+/ }
+
+    modifier {
+        required: [relation]
+        optional: [status, commit]
+        relation: enum("produces", "deploys", "deploys_to")
+        status: enum("planned", "running", "succeeded", "failed")
+        commit: string(/[0-9a-f]{7,40}/)
+    }
+
+    edge { source: [Build] relation: [produces] target: [Artifact] }
+    edge { source: [Deployment] relation: [deploys] target: [Artifact] }
+    edge { source: [Deployment] relation: [deploys_to] target: [Service] }
+
+    constraints { max_chain_length: 5 }
+}

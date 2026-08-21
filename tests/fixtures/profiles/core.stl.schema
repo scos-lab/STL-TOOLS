@@ -1,0 +1,21 @@
+# Test fixture: "Core" namespace of the composite profile fixture.
+# Exercises: namespaced routing, typed edge rules, string pattern, allow_cycles.
+schema CoreFixture v1.0 {
+    namespace "Core"
+
+    anchor source { pattern: /(Service|Component)_.+/ }
+    anchor target { pattern: /(Service|Component|Endpoint)_.+/ }
+
+    modifier {
+        required: [relation]
+        optional: [description, version]
+        relation: enum("contains", "calls", "exposes")
+        version: string(/[0-9]+\.[0-9]+/)
+    }
+
+    edge { source: [Service] relation: [contains] target: [Component] }
+    edge { source: [Component] relation: [calls] target: [Component, Service] }
+    edge { source: [Service, Component] relation: [exposes] target: [Endpoint] }
+
+    constraints { allow_cycles: false }
+}

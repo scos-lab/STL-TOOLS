@@ -1,0 +1,23 @@
+# Test fixture: "Operations" namespace of the composite profile fixture.
+# Exercises: float range, enum, edge rules sharing a relation name across triples.
+schema OperationsFixture v1.0 {
+    namespace "Operations"
+
+    anchor source { pattern: /(Metric|Alert|Incident)_.+/ }
+    anchor target { pattern: /(Service|Metric|Alert|Incident)_.+/ }
+
+    modifier {
+        required: [relation]
+        optional: [severity, threshold]
+        relation: enum("observes", "triggers", "affects")
+        severity: enum("low", "medium", "high")
+        threshold: float(0.0, 1.0)
+    }
+
+    edge { source: [Metric] relation: [observes] target: [Service] }
+    edge { source: [Metric] relation: [triggers] target: [Alert] }
+    edge { source: [Alert] relation: [triggers] target: [Incident] }
+    edge { source: [Incident] relation: [affects] target: [Service] }
+
+    constraints { max_chain_length: 8 }
+}

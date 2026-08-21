@@ -4,6 +4,8 @@ STL Parser - Semantic Tension Language Parser
 A Python parser for the Semantic Tension Language (STL) specification.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .parser import parse, parse_file
 from .models import (
     ParseResult,
@@ -21,7 +23,15 @@ from .errors import STLError, STLParseError, STLWarning
 
 # New modules (Priority 1 Tooling)
 from .builder import stl, stl_doc, StatementBuilder
-from .schema import load_schema, validate_against_schema, STLSchema, to_pydantic, from_pydantic
+from .schema import (
+    load_schema,
+    load_profile,
+    validate_against_schema,
+    validate_against_profiles,
+    STLSchema,
+    to_pydantic,
+    from_pydantic,
+)
 from .llm import clean, repair, validate_llm_output, prompt_template, LLMValidationResult
 from .emitter import STLEmitter
 
@@ -40,7 +50,13 @@ from .reader import stream_parse, STLReader, ReaderStats
 # Utilities (public)
 from ._utils import sanitize_anchor_name
 
-__version__ = "1.9.0"
+# Runtime version comes from the installed distribution metadata so that the
+# package and runtime versions agree; fall back to the project version when
+# running from a source checkout that is not installed.
+try:
+    __version__ = version("stl-parser")
+except PackageNotFoundError:
+    __version__ = "1.9.0"
 
 __all__ = [
     # Main parsing functions
@@ -74,7 +90,9 @@ __all__ = [
     "StatementBuilder",
     # Schema (new)
     "load_schema",
+    "load_profile",
     "validate_against_schema",
+    "validate_against_profiles",
     "STLSchema",
     "to_pydantic",
     "from_pydantic",
