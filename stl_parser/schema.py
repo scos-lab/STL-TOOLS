@@ -18,7 +18,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, get_args, get_origin
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, get_args, get_origin
 
 import networkx as nx
 from pydantic import BaseModel, Field, create_model
@@ -80,6 +80,24 @@ class SchemaEdgeRule(BaseModel):
     target_types: List[str]
 
 
+class RequirementRule(BaseModel):
+    """A cross-statement requirement: a statement with ``action == trigger_action``
+    is valid only if the document also contains a statement with
+    ``action == binding_action`` (optionally with a given ``outcome``), satisfying
+    the independence and identity-resolution policy.
+
+    Orchestrator-agnostic: the ``resolver`` names a callable supplied at validation
+    time (``resolvers={name: fn}``) that resolves an identity against an external
+    registry. The engine knows nothing about any specific registry or orchestrator.
+    """
+
+    trigger_action: str
+    binding_action: str
+    binding_outcome: Optional[str] = None
+    independent: bool = False  # require verifier != claimant on the binding statement
+    resolver: Optional[str] = None  # name of the identity resolver the binding must pass
+
+
 class STLSchema(BaseModel):
     """Top-level schema model for STL document validation."""
 
@@ -91,6 +109,7 @@ class STLSchema(BaseModel):
     modifier: SchemaModifierConstraint = Field(default_factory=SchemaModifierConstraint)
     constraints: SchemaConstraints = Field(default_factory=SchemaConstraints)
     edge_rules: List[SchemaEdgeRule] = Field(default_factory=list)
+    requirements: List["RequirementRule"] = Field(default_factory=list)
 
 
 class SchemaError(BaseModel):
@@ -276,6 +295,12 @@ class _SchemaParser:
                 schema.edge_rules.append(self._parse_edge_block())
                 self._expect_value("}")
 
+            elif keyword == "require":
+                self._advance()
+                self._expect_value("{")
+                schema.requirements.append(self._parse_require_block())
+                self._expect_value("}")
+
             else:
                 raise STLSchemaError(
                     code=ErrorCode.E602_INVALID_SCHEMA_FORMAT,
@@ -346,6 +371,38 @@ class _SchemaParser:
             source_types=values["source"],
             relations=values["relation"],
             target_types=values["target"],
+        )
+
+    def _parse_require_block(self) -> "RequirementRule":
+        """Parse a cross-statement requirement block:
+
+            require {
+                action: "merge"       # trigger
+                binding: "verify"     # required companion action
+                outcome: "pass"       # optional: required outcome on the binding
+                independent: true     # optional: verifier != claimant
+                resolver: "identity"  # optional: binding identity must resolve
+            }
+        """
+        data: Dict[str, Any] = {}
+        while self._peek() and self._peek()[1] != "}":
+            key = self._advance()[1]
+            self._expect_value(":")
+            if key == "independent":
+                data["independent"] = self._advance()[1] == "true"
+            else:
+                data[key] = self._advance()[1].strip('"').strip("'")
+        if "action" not in data or "binding" not in data:
+            raise STLSchemaError(
+                code=ErrorCode.E602_INVALID_SCHEMA_FORMAT,
+                message="require block needs at least 'action' and 'binding'",
+            )
+        return RequirementRule(
+            trigger_action=data["action"],
+            binding_action=data["binding"],
+            binding_outcome=data.get("outcome"),
+            independent=bool(data.get("independent", False)),
+            resolver=data.get("resolver"),
         )
 
     def _parse_modifier_block(self) -> SchemaModifierConstraint:
@@ -541,6 +598,7 @@ def load_profile(source: str) -> Dict[str, STLSchema]:
 def validate_against_schema(
     parse_result: ParseResult,
     schema: STLSchema,
+    resolvers: Optional[Dict[str, Callable[[str], bool]]] = None,
 ) -> SchemaValidationResult:
     """Validate a ParseResult against an STL schema.
 
@@ -591,6 +649,8 @@ def validate_against_schema(
         _validate_modifier_constraint(stmt, schema.modifier, idx, errors)
         _validate_edge_rules(stmt, schema.edge_rules, idx, errors)
 
+    _validate_requirements(parse_result.statements, schema.requirements, errors, resolvers)
+
     return SchemaValidationResult(
         is_valid=len(errors) == 0,
         errors=errors,
@@ -603,6 +663,7 @@ def validate_against_schema(
 def validate_against_profiles(
     parse_result: ParseResult,
     profiles: Dict[str, STLSchema],
+    resolvers: Optional[Dict[str, Callable[[str], bool]]] = None,
 ) -> SchemaValidationResult:
     """Validate statements using source-selected schemas and shared targets."""
     errors: List[SchemaError] = []
@@ -671,6 +732,11 @@ def validate_against_profiles(
     )
     _validate_graph_constraints(parse_result, graph_constraints, errors)
 
+    # Cross-statement requirements are document-level: aggregate across profiles
+    # and evaluate over the whole statement set.
+    all_requirements = [req for profile in profiles.values() for req in profile.requirements]
+    _validate_requirements(parse_result.statements, all_requirements, errors, resolvers)
+
     versions = ",".join(
         f"{name}:{profile.version}" for name, profile in sorted(profiles.items())
     )
@@ -680,6 +746,74 @@ def validate_against_profiles(
         schema_name="CompositeProfiles",
         schema_version=versions,
     )
+
+
+def _validate_requirements(
+    statements: List[Statement],
+    requirements: List["RequirementRule"],
+    errors: List[SchemaError],
+    resolvers: Optional[Dict[str, Callable[[str], bool]]] = None,
+) -> None:
+    """Enforce cross-statement requirement rules.
+
+    A statement whose ``action`` equals ``trigger_action`` is valid only if some
+    statement in the document satisfies the binding: matching ``binding_action``
+    (and ``binding_outcome`` if set), independent (``verifier != claimant``) when
+    required, and passing the named identity ``resolver`` when required. When a
+    required binding cannot be satisfied the rule FAILS CLOSED with an error that
+    names exactly what is missing — the structural fix for the "gate required from
+    a role bound to nobody" deadlock (silence is not health).
+    """
+    resolvers = resolvers or {}
+    if not requirements:
+        return
+
+    def _mod(stmt: Statement, key: str) -> Optional[str]:
+        return getattr(stmt.modifiers, key, None)
+
+    for req in requirements:
+        for idx, stmt in enumerate(statements):
+            if _mod(stmt, "action") != req.trigger_action:
+                continue
+
+            def _satisfies(b: Statement) -> bool:
+                if _mod(b, "action") != req.binding_action:
+                    return False
+                if req.binding_outcome is not None and _mod(b, "outcome") != req.binding_outcome:
+                    return False
+                if req.independent:
+                    verifier, claimant = _mod(b, "verifier"), _mod(b, "claimant")
+                    if not verifier or not claimant or verifier == claimant:
+                        return False
+                if req.resolver:
+                    fn = resolvers.get(req.resolver)
+                    if fn is None:
+                        return False  # unresolvable gate — fail closed
+                    identity = _mod(b, "verifier") or _mod(b, "author")
+                    if not identity or not fn(identity):
+                        return False
+                return True
+
+            if not any(_satisfies(b) for b in statements):
+                reason = (f"action='{req.trigger_action}' requires a statement with "
+                          f"action='{req.binding_action}'")
+                if req.binding_outcome is not None:
+                    reason += f" outcome='{req.binding_outcome}'"
+                if req.independent:
+                    reason += ", independent (verifier != claimant)"
+                if req.resolver:
+                    if req.resolver not in resolvers:
+                        reason += (f", with the '{req.resolver}' identity binding resolved "
+                                   f"— but no '{req.resolver}' resolver was supplied")
+                    else:
+                        reason += f", with its identity resolving via '{req.resolver}'"
+                errors.append(SchemaError(
+                    code="E612",
+                    message=f"Statement {idx}: unsatisfied requirement — {reason}; "
+                            "no statement satisfies it.",
+                    statement_index=idx,
+                    field="action",
+                ))
 
 
 def _select_profile(
