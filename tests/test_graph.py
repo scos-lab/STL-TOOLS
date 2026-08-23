@@ -330,3 +330,41 @@ class TestExtractChains:
         chains = g.extract_chains(min_length=1)
         assert len(chains) == 1
         assert chains[0] == ["[Physics:Energy]", "[Physics:Mass]", "[Gravity]"]
+
+
+class TestExtractChainsBounded:
+    """Dense graphs make simple-path enumeration combinatorial; the bounds must return promptly."""
+
+    def _dense(self, n=11):
+        from stl_parser.graph import STLGraph
+        import networkx as nx
+        g = nx.DiGraph()
+        nodes = [f"[N{i}]" for i in range(n)]
+        # complete DAG: every i → j for i < j, plus a source S and sink T
+        for i in range(n):
+            for j in range(i + 1, n):
+                g.add_edge(nodes[i], nodes[j])
+        g.add_edge("[S]", nodes[0]); g.add_edge(nodes[-1], "[T]")
+        return STLGraph.from_networkx(g)
+
+    def test_max_paths_truncates(self):
+        import time
+        sg = self._dense(11)
+        t0 = time.perf_counter()
+        chains = sg.extract_chains(min_length=1, max_paths=50)
+        assert len(chains) <= 50 and chains
+        assert sg.last_chains_truncated is True
+        assert time.perf_counter() - t0 < 2.0
+
+    def test_time_budget_truncates(self):
+        import time
+        sg = self._dense(13)
+        t0 = time.perf_counter()
+        sg.extract_chains(min_length=1, time_budget_s=0.2)
+        assert time.perf_counter() - t0 < 1.5
+
+    def test_unbounded_behaviour_unchanged_on_small_graph(self):
+        sg = self._dense(4)
+        full = sg.extract_chains(min_length=1)
+        assert sg.last_chains_truncated is False
+        assert full == sg.extract_chains(min_length=1, max_paths=10_000, time_budget_s=30)

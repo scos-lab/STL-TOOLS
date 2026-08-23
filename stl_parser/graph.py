@@ -240,7 +240,13 @@ class STLGraph:
             "edges": self.graph.number_of_edges(),
         }
 
-    def extract_chains(self, min_length: int = 2) -> List[List[str]]:
+    def extract_chains(
+        self,
+        min_length: int = 2,
+        max_paths: Optional[int] = None,
+        cutoff: Optional[int] = None,
+        time_budget_s: Optional[float] = None,
+    ) -> List[List[str]]:
         """
         Extracts all maximal directed chains from the graph.
 
@@ -248,17 +254,36 @@ class STLGraph:
         (or a branch point) and ends at a node with out-degree 0 (or a merge
         point). Branches produce separate chains.
 
+        Simple-path enumeration is combinatorial: on a dense subgraph it can run
+        for minutes (observed 2026-08-23 in stg-engine's multi-seed recall). The
+        three optional bounds make it safe to call on arbitrary graphs; when a
+        bound stops the enumeration early, ``self.last_chains_truncated`` is True
+        and the chains found so far are returned.
+
         Args:
             min_length: Minimum number of edges in a chain (default 2, i.e.
                         at least 3 nodes). Set to 1 to include single-edge
                         chains as well.
+            max_paths: Stop after this many distinct paths have been collected.
+            cutoff: Maximum path length (edges) passed to the path enumerator.
+            time_budget_s: Stop enumerating after this many wall-clock seconds.
 
         Returns:
             A list of chains, where each chain is a list of anchor IDs
             (e.g. ``["[A]", "[B]", "[C]"]``).
         """
+        import time as _time
+        self.last_chains_truncated = False
         if self.graph.number_of_nodes() == 0:
             return []
+        t0 = _time.perf_counter()
+
+        def _over_budget() -> bool:
+            if max_paths is not None and len(chains) >= max_paths:
+                return True
+            if time_budget_s is not None and (_time.perf_counter() - t0) > time_budget_s:
+                return True
+            return False
 
         # Collect source nodes (in-degree 0) — natural chain starts
         sources = [n for n in self.graph.nodes() if self.graph.in_degree(n) == 0]
@@ -274,16 +299,25 @@ class STLGraph:
         seen_chains: set = set()  # deduplicate by tuple
 
         for src in sources:
+            if _over_budget():
+                self.last_chains_truncated = True
+                break
             if sinks:
                 for sink in sinks:
                     if src == sink:
                         continue
+                    if _over_budget():
+                        self.last_chains_truncated = True
+                        break
                     try:
-                        for path in nx.all_simple_paths(self.graph, src, sink):
+                        for path in nx.all_simple_paths(self.graph, src, sink, cutoff=cutoff):
                             key = tuple(path)
                             if len(path) - 1 >= min_length and key not in seen_chains:
                                 seen_chains.add(key)
                                 chains.append(path)
+                            if _over_budget():
+                                self.last_chains_truncated = True
+                                break
                     except nx.NetworkXError:
                         continue
             else:
