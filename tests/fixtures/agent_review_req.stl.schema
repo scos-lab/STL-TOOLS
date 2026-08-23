@@ -1,0 +1,31 @@
+# Minimal fixture exercising the cross-statement requirement rule + resolver hook.
+schema ReviewReq v0.1 {
+    namespace "Review"
+
+    anchor source {
+        namespace: required("Review")
+        pattern: /(Verifier|WorkItem)_[A-Za-z0-9_]+/
+    }
+    anchor target {
+        pattern: /(WorkItem|Revision|Artifact)_[A-Za-z0-9_]+/
+    }
+
+    modifier {
+        required: [action]
+        optional: [outcome, verifier, claimant, author]
+        action: enum("merge", "verify")
+        outcome: enum("pass", "fail")
+        verifier: string
+        claimant: string
+        author: string
+    }
+
+    # A merge requires an independent, registry-resolved verify=pass elsewhere.
+    require {
+        action: "merge"
+        binding: "verify"
+        outcome: "pass"
+        independent: true
+        resolver: "identity"
+    }
+}
