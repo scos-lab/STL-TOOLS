@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.11.0 (2026-08-24)
+
+### Cross-statement requirement rule + identity resolver hook (contributed by Scorpse)
+
+- New `require { action / binding / outcome / independent / resolver }` schema block
+  (`RequirementRule`): a statement with `action == <trigger>` is valid only if the
+  document also contains a binding statement (`action == <binding>`, optional
+  `outcome`), optionally independent (`verifier != claimant`) and passing a named
+  identity resolver. Unsatisfiable requirements **fail closed** with error `E612`
+  naming exactly what is missing — the structural fix for the "gate required from a
+  role bound to nobody" deadlock reported on discussion #8.
+- `validate_against_schema` / `validate_against_profiles` gain an optional
+  `resolvers={name: fn}` parameter; the identity registry stays external to the
+  engine (orchestrator-agnostic).
+- Follow-up (maintainers): registered `E612_SCHEMA_REQUIREMENT` in the public
+  error-code registry with message + suggestion; widened the "every code has a
+  public message" test to cover it.
+
 ## v1.10.2 (2026-08-24)
 
 - `STLGraph.extract_chains` gains optional bounds: `max_paths` (stop after N

@@ -114,6 +114,7 @@ class ErrorCode(str, Enum):
     E609_SCHEMA_CYCLE = "E609"
     E610_SCHEMA_PROFILE_ROUTING = "E610"
     E611_SCHEMA_EDGE_RULE = "E611"
+    E612_SCHEMA_REQUIREMENT = "E612"
 
     # LLM Errors (E700-E799)
     E700_LLM_CLEAN_ERROR = "E700"
@@ -398,6 +399,10 @@ ERROR_MESSAGES: Dict[str, Dict[str, str]] = {
     "E611": {
         "message": "Schema edge rule violation",
         "suggestion": "Use a source type, relation, and target type combination declared by an edge rule"
+    },
+    "E612": {
+        "message": "Unsatisfied cross-statement requirement",
+        "suggestion": "Add the required binding statement (matching action/outcome, independent verifier, resolvable identity) or supply the named resolver"
     },
     # Diff/Patch Errors
     "E950": {

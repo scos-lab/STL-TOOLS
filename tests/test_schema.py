@@ -190,7 +190,7 @@ class TestLoadSchema:
 
         assert exc_info.value.code == "E400"
 
-    @pytest.mark.parametrize("code", [f"E{number}" for number in range(604, 612)])
+    @pytest.mark.parametrize("code", [f"E{number}" for number in range(604, 613)])
     def test_new_schema_error_codes_have_public_messages(self, code):
         assert get_error_info(code) is not None
 
