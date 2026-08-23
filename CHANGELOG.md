@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.10.2 (2026-08-24)
+
+- `STLGraph.extract_chains` gains optional bounds: `max_paths` (stop after N
+  distinct chains), `cutoff` (maximum path length passed to the enumerator) and
+  `time_budget_s` (wall-clock budget); `graph.last_chains_truncated` reports
+  whether a bound cut the enumeration short. Default behaviour is unchanged
+  (unbounded). Motivation: simple-path enumeration is combinatorial on dense
+  subgraphs — a multi-seed recall query over a ~10k-edge STG graph spun for
+  minutes in `all_simple_paths`; callers can now bound the work.
+
 ## v1.10.1 (2026-08-21)
 
 - Fix: `validate_datetime_format` rejected `Z`-suffixed timestamps on Python 3.9

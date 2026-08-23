@@ -1,4 +1,4 @@
-# STL Parser (v1.10.1)
+# STL Parser (v1.10.2)
 
 **A comprehensive Python toolkit for Semantic Tension Language (STL) — parse, build, validate, query, diff, stream, and repair structured knowledge.**
 
@@ -362,7 +362,7 @@ Apache License 2.0 — see [LICENSE](../LICENSE).
   author = {SCOS-Lab},
   title = {STL Parser: A Comprehensive Toolkit for Semantic Tension Language},
   year = {2025},
-  version = {1.10.1},
+  version = {1.10.2},
   url = {https://github.com/scos-lab/semantic-tension-language}
 }
 ```
